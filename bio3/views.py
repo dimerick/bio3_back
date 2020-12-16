@@ -17,6 +17,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from django.utils import timezone
 from django.db import connection
 from django.http import JsonResponse
+from django.conf import settings
 
 # Create your views here.
 class HelloBio3science(APIView):
@@ -366,6 +367,9 @@ class ProjectNetworkList(APIView):
 
                 cursor.execute("select ST_X(uni.location) as long, ST_Y(uni.location) as lat, ST_X(community_assoc.location) as long_assoc, ST_Y(community_assoc.location) as lat_assoc from bio3_project project inner join bio3_university uni on project.main_university_id = uni.id inner join bio3_project_communities pc on project.id = pc.project_id inner join bio3_community community_assoc on pc.community_id = community_assoc.id where project.id = %s;", [projects[i]['id']])
                 projects[i]['communities_network'] = dictfetchall(cursor)
+
+                cursor.execute("select id, concat(%s, image) as url from bio3_projectimage where project_id = %s;", [settings.MEDIA_URL, projects[i]['id']])
+                projects[i]['images'] = dictfetchall(cursor)
 
             return JsonResponse(projects, safe=False)
 
