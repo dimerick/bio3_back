@@ -69,6 +69,8 @@ class Project(models.Model):
     universities = models.ManyToManyField(University, related_name='projects', blank=True)
     communities = models.ManyToManyField(Community, related_name='projects', blank=True)
 
+    is_active = models.BooleanField(default=True)
+
     class Meta:
         unique_together = (('name', 'created_by', 'main_university'))
 

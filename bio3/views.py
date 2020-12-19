@@ -18,8 +18,25 @@ from django.utils import timezone
 from django.db import connection
 from django.http import JsonResponse
 from django.conf import settings
+from rest_framework.permissions import BasePermission
 
 # Create your views here.
+
+class IsOwnerOrReadOnly(BasePermission):
+    """
+    Object-level permission to only allow owners of an object to edit it.
+    """
+
+    def has_object_permission(self, request, view, obj):
+        # Read permissions are allowed to any request,
+        # so we'll always allow GET, HEAD or OPTIONS requests.
+        if request.method in permissions.SAFE_METHODS:
+            return True
+
+        # Instance must have an attribute named `created_by_id`.
+        print(request.user)
+        return obj.created_by_id == request.user.id
+
 class HelloBio3science(APIView):
     permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
 
@@ -230,10 +247,13 @@ class ProjectList(APIView):
     def get(self, request, format=None):
 
         name = request.GET.get('name', None)
+        user = request.GET.get('user', None)
+        if(user):
+            objs = Project.objects.filter(created_by_id=user, is_active=True).order_by('-created_at')
         if(name):
-            objs = Project.objects.filter(name__icontains=name)
+            objs = Project.objects.filter(name__icontains=name, is_active=True).order_by('-created_at')
         else:
-            objs = Project.objects.all()
+            objs = Project.objects.all().filter(is_active=True).order_by('-created_at')
 
         serializer = ProjectSerializer(objs, many=True)
         return Response(serializer.data)
@@ -249,9 +269,14 @@ class ProjectList(APIView):
 
 class ProjectDetail(APIView):    
 
+    # serializer_class = ProjectSerializer
+    permission_classes = [IsOwnerOrReadOnly]
+
     def get_object(self, pk):
         try:
-            return Project.objects.get(id=pk)
+            obj = Project.objects.get(id=pk, is_active=True)
+            self.check_object_permissions(self.request, obj)
+            return obj
         except Project.DoesNotExist:
             raise Http404
 
@@ -271,7 +296,8 @@ class ProjectDetail(APIView):
 
     def delete(self, request, pk, format=None):
         obj = self.get_object(pk)
-        obj.delete()
+        obj.is_active = False
+        obj.save()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     def patch(self, request, pk, format=None):
@@ -359,7 +385,7 @@ class ProjectNetworkList(APIView):
     
     def get(self, request, format=None):
         with connection.cursor() as cursor:
-            cursor.execute("select project.id, project.name, project.description, project.created_at, uni.name as universidad, ST_X(uni.location) as long, ST_Y(uni.location) as lat, ST_AsText(ST_Transform(uni.location, 4326)) as uni_location, user2.id as user_id, user2.name as user_name, user2.last_name as user_last_name from bio3_project project inner join bio3_university uni on project.main_university_id = uni.id inner join bio3_customuser user2 on project.created_by_id = user2.id;")
+            cursor.execute("select project.id, project.name, project.description, project.created_at, uni.name as universidad, ST_X(uni.location) as long, ST_Y(uni.location) as lat, ST_AsText(ST_Transform(uni.location, 4326)) as uni_location, user2.id as user_id, user2.name as user_name, user2.last_name as user_last_name from bio3_project project inner join bio3_university uni on project.main_university_id = uni.id inner join bio3_customuser user2 on project.created_by_id = user2.id where project.is_active = true;")
             projects = dictfetchall(cursor)
             for i in range(0, len(projects)):
                 cursor.execute("select ST_X(uni.location) as long, ST_Y(uni.location) as lat, ST_X(uni_assoc.location) as long_assoc, ST_Y(uni_assoc.location) as lat_assoc from bio3_project project inner join bio3_university uni on project.main_university_id = uni.id inner join bio3_project_universities pu on project.id = pu.project_id inner join bio3_university uni_assoc on pu.university_id = uni_assoc.id where project.id = %s;", [projects[i]['id']])
@@ -377,10 +403,10 @@ class NodesNetworkList(APIView):
     def get(self, request, format=None):
         nodes = dict()
         with connection.cursor() as cursor:
-            cursor.execute("select uni.id, min(uni.name) as name, min(uni.long) as long, min(uni.lat) as lat, 10+exp(sum(uni.points)*0.001) as points from (select min(uni.id) as id, min(uni.name) as name, min(ST_X(uni.location)) as long, min(ST_Y(uni.location)) as lat, count(uni.id)*1 as points from bio3_project project inner join bio3_university uni on project.main_university_id = uni.id group by uni.id union all select min(uni.id) as id, min(uni.name) as name, min(ST_X(uni.location)) as long, min(ST_Y(uni.location)) as lat, count(uni.id)*0.5 as points from bio3_project project inner join bio3_project_universities pu on project.id = pu.project_id inner join bio3_university uni on pu.university_id = uni.id group by university_id) as uni group by uni.id;")
+            cursor.execute("select uni.id, min(uni.name) as name, min(uni.long) as long, min(uni.lat) as lat, 10+exp(sum(uni.points)*0.001) as points from (select min(uni.id) as id, min(uni.name) as name, min(ST_X(uni.location)) as long, min(ST_Y(uni.location)) as lat, count(uni.id)*1 as points from bio3_project project inner join bio3_university uni on project.main_university_id = uni.id where project.is_active = true group by uni.id union all select min(uni.id) as id, min(uni.name) as name, min(ST_X(uni.location)) as long, min(ST_Y(uni.location)) as lat, count(uni.id)*0.5 as points from bio3_project project inner join bio3_project_universities pu on project.id = pu.project_id inner join bio3_university uni on pu.university_id = uni.id where project.is_active = true group by university_id) as uni group by uni.id;")
             nodes['universities'] = dictfetchall(cursor)
         
         with connection.cursor() as cursor2:
-            cursor2.execute("select pc.community_id as id, min(community.name) as name, min(ST_X(community.location)) as long, min(ST_Y(community.location)) as lat, 10+exp((count(pc.community_id) * 0.5)*0.001) as points from bio3_project_communities pc inner join bio3_community community on pc.community_id = community.id group by pc.community_id;")
+            cursor2.execute("select pc.community_id as id, min(community.name) as name, min(ST_X(community.location)) as long, min(ST_Y(community.location)) as lat, 10+exp((count(pc.community_id) * 0.5)*0.001) as points from bio3_project_communities pc inner join bio3_project project on pc.project_id = project.id inner join bio3_community community on pc.community_id = community.id where project.is_active = true group by pc.community_id;")
             nodes['communities'] = dictfetchall(cursor2)
         return JsonResponse(nodes, safe=False)
